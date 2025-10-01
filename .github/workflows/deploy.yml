@@ -1,38 +1,94 @@
-Ejecute mkdir -p ~/.ssh 
-  mkdir -p ~/.ssh
-  eco "***
-  ***
-  ***
-  ***
-  ***
-  ***
-  ***
-  ***
-  ***
-  ***
-  ***
-  ***
-  ***
-  ***
-  ***
-  ***
-  ***
-  ***
-  ***
-  ***
-  ***
-  ***
-  ***
-  ***
-  ***
-  ***
-  " > ~/.ssh/id_rsa
-  chmod 600 ~/.ssh/id_rsa
-  ssh-keyscan -H *** >> ~/.ssh/known_hosts
-  shell: /usr/bin/bash -e {0}
-  Env: 
-    SERVICE_NAME: paquetes
-    SERVICE_PORT: 8081
-    JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.8-9/x64
-    JAVA_HOME_21_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.8-9/x64
-Error: Proceso completado con el código de salida 1. 
+name: Deploy Paquetes Service
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+env:
+  SERVICE_NAME: paquetes
+  SERVICE_PORT: 8081
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'maven'
+
+      - name: Build JAR
+        run: mvn clean package -DskipTests
+
+      - name: Verify JAR
+        run: |
+          echo "✅ JAR built successfully:"
+          ls -la target/*.jar
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Test SSH connection
+        run: |
+          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ec2-user@${{ secrets.EC2_HOST }} "echo '✅ SSH connection successful'"
+
+      - name: Create directories on EC2
+        run: |
+          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ec2-user@${{ secrets.EC2_HOST }} "
+            mkdir -p /home/ec2-user/$SERVICE_NAME/backup
+            echo 'Directories created for $SERVICE_NAME'
+          "
+
+      - name: Deploy to EC2
+        run: |
+          scp -i ~/.ssh/id_rsa target/*.jar ec2-user@${{ secrets.EC2_HOST }}:/home/ec2-user/$SERVICE_NAME/
+          
+          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ec2-user@${{ secrets.EC2_HOST }} "
+            cd /home/ec2-user/$SERVICE_NAME
+            
+            # Backup existing JAR
+            if ls *.jar 1> /dev/null 2>&1; then
+              echo 'Creating backup...'
+              mv *.jar backup/
+            fi
+            
+            # Stop service
+            echo 'Stopping existing service...'
+            pkill -f 'java.*$SERVICE_NAME' || true
+            sleep 3
+            
+            # Kill port process
+            PORT_PID=\$(lsof -ti:$SERVICE_PORT 2>/dev/null || echo '')
+            if [ ! -z \"\$PORT_PID\" ]; then
+              kill -9 \$PORT_PID 2>/dev/null || true
+              sleep 2
+            fi
+            
+            # Start service
+            echo 'Starting $SERVICE_NAME on port $SERVICE_PORT...'
+            nohup java -jar *.jar --server.port=$SERVICE_PORT --server.address=0.0.0.0 > app.log 2>&1 &
+            echo \"Service started with PID: \$!\"
+            
+            sleep 25
+            
+            if ss -tuln | grep -q \":$SERVICE_PORT\"; then
+              echo '✅ Service deployed successfully'
+            else
+              echo '❌ Deployment failed'
+              cat app.log
+              exit 1
+            fi
+          "
