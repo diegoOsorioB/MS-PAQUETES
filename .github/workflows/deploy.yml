@@ -5,7 +5,6 @@ on:
     branches: [ main ]
 
 env:
-  EC2_HOST: "ec2-3-16-112-149.us-east-2.compute.amazonaws.com"
   SERVICE_NAME: "paquetes"
   SERVICE_PORT: "8081"
 
@@ -27,99 +26,42 @@ jobs:
       - name: Build application
         run: mvn clean package -DskipTests
 
-      - name: Setup AWS SSH Key
+      - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
-          # Usar la clave .pem de AWS directamente
           echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H $EC2_HOST >> ~/.ssh/known_hosts
+          ssh-keyscan -H ${{ secrets.EC2_DNS }} >> ~/.ssh/known_hosts
 
-      - name: Test AWS SSH Connection
+      - name: Test SSH Connection
         run: |
-          echo "Testing connection to EC2 instance..."
+          echo "Testing SSH connection to ${{ secrets.EC2_DNS }}..."
           ssh -i ~/.ssh/id_rsa \
               -o StrictHostKeyChecking=no \
               -o ConnectTimeout=10 \
-              ec2-user@$EC2_HOST "echo '✅ Successfully connected to EC2 using AWS key'"
+              ec2-user@${{ secrets.EC2_DNS }} "echo '✅ SSH connection successful'"
 
-      - name: Deploy to EC2
+      - name: Deploy Application
         run: |
-          echo "Starting deployment..."
-          
-          # Upload JAR file
+          # Upload JAR
           scp -i ~/.ssh/id_rsa \
               -o StrictHostKeyChecking=no \
               target/*.jar \
-              ec2-user@$EC2_HOST:/home/ec2-user/$SERVICE_NAME/
+              ec2-user@${{ secrets.EC2_DNS }}:/home/ec2-user/$SERVICE_NAME/
           
-          echo "JAR uploaded successfully"
-          
-          # Execute deployment commands
+          # Deploy
           ssh -i ~/.ssh/id_rsa \
               -o StrictHostKeyChecking=no \
-              ec2-user@$EC2_HOST "
-              
+              ec2-user@${{ secrets.EC2_DNS }} "
             cd /home/ec2-user/$SERVICE_NAME
-            
-            echo '=== Starting deployment process ==='
-            
-            # Create backup if needed
-            if ls *.jar > /dev/null 2>&1; then
-              mkdir -p backup
-              mv *.jar backup/
-              echo 'Backup created'
-            fi
-            
-            # Stop any running service
-            echo 'Stopping existing service...'
-            pkill -f 'java.*$SERVICE_NAME' || echo 'No running service found'
+            pkill -f java || true
             sleep 5
-            
-            # Ensure port is free
-            echo 'Checking port $SERVICE_PORT...'
-            lsof -ti:$SERVICE_PORT | xargs kill -9 2>/dev/null || true
-            sleep 2
-            
-            # Start the application
-            echo 'Starting $SERVICE_NAME on port $SERVICE_PORT...'
             nohup java -jar *.jar --server.port=$SERVICE_PORT --server.address=0.0.0.0 > app.log 2>&1 &
-            echo \"Application started with PID: \$!\"
-            
-            # Wait for startup
-            echo 'Waiting for application to start...'
             sleep 30
-            
-            # Verify deployment
-            if ss -tuln | grep -q \":$SERVICE_PORT\"; then
-              echo '🎉 DEPLOYMENT SUCCESSFUL!'
-              echo 'Service: $SERVICE_NAME'
-              echo 'Port: $SERVICE_PORT'
-              echo 'URL: http://$EC2_HOST:$SERVICE_PORT'
+            if ss -tuln | grep -q ':$SERVICE_PORT'; then
+              echo '✅ Deployment successful'
             else
-              echo '❌ DEPLOYMENT FAILED'
-              echo 'Application logs:'
-              cat app.log
+              echo '❌ Deployment failed'
               exit 1
-            fi
-          "
-
-      - name: Verify Deployment
-        run: |
-          ssh -i ~/.ssh/id_rsa \
-              -o StrictHostKeyChecking=no \
-              ec2-user@$EC2_HOST "
-            echo '=== Deployment Verification ==='
-            echo 'Java processes:'
-            ps aux | grep java | grep -v grep || echo 'No Java processes'
-            echo ''
-            echo 'Open ports:'
-            ss -tuln | grep -E ':(8080|8081|8082|8083|8084)' | sort || echo 'No deployment ports'
-            echo ''
-            echo 'Service $SERVICE_NAME status:'
-            if ss -tuln | grep -q \":$SERVICE_PORT\"; then
-              echo '✅ RUNNING on port $SERVICE_PORT'
-            else
-              echo '❌ NOT RUNNING'
             fi
           "
