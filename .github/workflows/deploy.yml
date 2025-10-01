@@ -33,13 +33,24 @@ jobs:
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H ${{ secrets.EC2_DNS }} >> ~/.ssh/known_hosts
 
+      - name: Create Directory on EC2
+        run: |
+          echo "=== Creating directory on EC2 ==="
+          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ec2-user@${{ secrets.EC2_DNS }} "
+            mkdir -p /home/ec2-user/$SERVICE_NAME
+            echo '✅ Directory /home/ec2-user/$SERVICE_NAME created'
+            ls -la /home/ec2-user/ | grep $SERVICE_NAME
+          "
+
       - name: Upload JAR
         run: |
+          echo "=== Uploading JAR file ==="
           scp -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no target/*.jar ec2-user@${{ secrets.EC2_DNS }}:/home/ec2-user/$SERVICE_NAME/
+          echo "✅ JAR uploaded successfully"
 
-      - name: Deploy Application Safely
+      - name: Deploy Application
         run: |
-          echo "=== Starting safe deployment ==="
+          echo "=== Starting deployment ==="
           ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ec2-user@${{ secrets.EC2_DNS }} "
             set -x
             
@@ -95,7 +106,10 @@ jobs:
             echo 'Service: $SERVICE_NAME'
             echo 'Port: $SERVICE_PORT'
             echo ''
-            echo 'Processes for $SERVICE_NAME:'
+            echo 'Directory contents:'
+            ls -la /home/ec2-user/$SERVICE_NAME/
+            echo ''
+            echo 'Processes:'
             ps aux | grep 'java.*$SERVICE_NAME' | grep -v grep || echo 'No specific service processes'
             echo ''
             echo 'Port status:'
