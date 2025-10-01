@@ -2,9 +2,9 @@ name: Deploy Paquetes Service
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
   pull_request:
-    branches: [ main, master ]
+    branches: [ main ]
 
 env:
   SERVICE_NAME: paquetes
@@ -13,7 +13,6 @@ env:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
     
     steps:
       - name: Checkout code
@@ -29,28 +28,28 @@ jobs:
       - name: Build JAR
         run: mvn clean package -DskipTests
 
-      - name: Verify JAR
-        run: |
-          echo "✅ JAR built successfully:"
-          ls -la target/*.jar
-
       - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_rsa
+          # Crear el archivo de forma más robusta
+          cat << 'EOF' > ~/.ssh/id_rsa
+          ${{ secrets.EC2_SSH_KEY }}
+          EOF
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
 
       - name: Test SSH connection
         run: |
-          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ec2-user@${{ secrets.EC2_HOST }} "echo '✅ SSH connection successful'"
-
-      - name: Create directories on EC2
-        run: |
-          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ec2-user@${{ secrets.EC2_HOST }} "
-            mkdir -p /home/ec2-user/$SERVICE_NAME/backup
-            echo 'Directories created for $SERVICE_NAME'
-          "
+          if ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no -o ConnectTimeout=10 ec2-user@${{ secrets.EC2_HOST }} "echo '✅ SSH OK'"; then
+            echo "SSH connection successful"
+          else
+            echo "SSH connection failed"
+            echo "Debug info:"
+            ls -la ~/.ssh/
+            echo "Key content (first 100 chars):"
+            head -c 100 ~/.ssh/id_rsa
+            exit 1
+          fi
 
       - name: Deploy to EC2
         run: |
@@ -59,36 +58,25 @@ jobs:
           ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ec2-user@${{ secrets.EC2_HOST }} "
             cd /home/ec2-user/$SERVICE_NAME
             
-            # Backup existing JAR
+            # Backup
             if ls *.jar 1> /dev/null 2>&1; then
-              echo 'Creating backup...'
               mv *.jar backup/
             fi
             
             # Stop service
-            echo 'Stopping existing service...'
             pkill -f 'java.*$SERVICE_NAME' || true
             sleep 3
             
-            # Kill port process
-            PORT_PID=\$(lsof -ti:$SERVICE_PORT 2>/dev/null || echo '')
-            if [ ! -z \"\$PORT_PID\" ]; then
-              kill -9 \$PORT_PID 2>/dev/null || true
-              sleep 2
-            fi
-            
             # Start service
-            echo 'Starting $SERVICE_NAME on port $SERVICE_PORT...'
             nohup java -jar *.jar --server.port=$SERVICE_PORT --server.address=0.0.0.0 > app.log 2>&1 &
-            echo \"Service started with PID: \$!\"
+            echo \"Started with PID: \$!\"
             
-            sleep 25
+            sleep 20
             
             if ss -tuln | grep -q \":$SERVICE_PORT\"; then
-              echo '✅ Service deployed successfully'
+              echo '✅ Deployed successfully'
             else
               echo '❌ Deployment failed'
-              cat app.log
               exit 1
             fi
           "
