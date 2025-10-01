@@ -3,12 +3,11 @@ name: Deploy Paquetes Service
 on:
   push:
     branches: [ main ]
-  pull_request:
-    branches: [ main ]
 
 env:
   SERVICE_NAME: paquetes
   SERVICE_PORT: 8081
+  EC2_HOST: "ec2-3-16-112-149.us-east-2.compute.amazonaws.com"
 
 jobs:
   build-and-deploy:
@@ -28,109 +27,131 @@ jobs:
       - name: Build JAR
         run: mvn clean package -DskipTests
 
-      - name: Setup SSH Connection
+      - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
-          # FORMA CORRECTA: Usar echo sin heredoc
           echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H $EC2_HOST >> ~/.ssh/known_hosts
           
-          # Verificar que la clave se creó correctamente
-          echo "=== Verificando clave SSH ==="
+          # Verificar la clave
+          echo "=== Verificación SSH ==="
           ls -la ~/.ssh/
-          echo "Primeras 3 líneas de la clave:"
-          head -3 ~/.ssh/id_rsa
-          echo "Últimas 3 líneas de la clave:"
-          tail -3 ~/.ssh/id_rsa
+          echo "Primera línea clave: $(head -1 ~/.ssh/id_rsa)"
 
       - name: Test SSH Connection
         run: |
-          echo "=== Probando conexión SSH ==="
+          echo "=== Probando conexión a $EC2_HOST ==="
           ssh -i ~/.ssh/id_rsa \
               -o StrictHostKeyChecking=no \
-              -o ConnectTimeout=30 \
-              -o BatchMode=yes \
-              ec2-user@${{ secrets.EC2_HOST }} "echo '✅ Conexión SSH exitosa'"
+              -o ConnectTimeout=10 \
+              ec2-user@$EC2_HOST "echo '✅ SSH exitoso - Conectado a EC2'"
 
-      - name: Deploy to EC2
+      - name: Prepare EC2 Directories
         run: |
-          echo "=== Iniciando despliegue ==="
-          
-          # Subir JAR
+          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ec2-user@$EC2_HOST "
+            echo '=== Preparando directorios en EC2 ==='
+            mkdir -p /home/ec2-user/$SERVICE_NAME/backup
+            echo 'Directorios listos para $SERVICE_NAME'
+          "
+
+      - name: Deploy Application
+        run: |
+          echo "=== Subiendo JAR a EC2 ==="
           scp -i ~/.ssh/id_rsa \
                -o StrictHostKeyChecking=no \
                target/*.jar \
-               ec2-user@${{ secrets.EC2_HOST }}:/home/ec2-user/$SERVICE_NAME/
+               ec2-user@$EC2_HOST:/home/ec2-user/$SERVICE_NAME/
           
-          echo "✅ JAR subido exitosamente"
-          
-          # Ejecutar despliegue en EC2
-          ssh -i ~/.ssh/id_rsa \
-              -o StrictHostKeyChecking=no \
-              ec2-user@${{ secrets.EC2_HOST }} "
-              
+          echo "✅ JAR transferido exitosamente"
+
+      - name: Start Service on EC2
+        run: |
+          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ec2-user@$EC2_HOST "
             cd /home/ec2-user/$SERVICE_NAME
             
-            echo '=== Creando backup ==='
+            echo '=== Iniciando despliegue de $SERVICE_NAME ==='
+            
+            # 1. Backup del JAR anterior
             if ls *.jar > /dev/null 2>&1; then
+              echo 'Creando backup...'
               mkdir -p backup
               mv *.jar backup/
-              echo '✅ Backup creado'
+              echo '✅ Backup completado'
             fi
             
-            echo '=== Deteniendo servicio anterior ==='
-            pkill -f 'java.*$SERVICE_NAME' || echo 'No hay procesos previos'
-            sleep 5
+            # 2. Detener servicio existente
+            echo 'Deteniendo servicio anterior...'
+            pkill -f 'java.*$SERVICE_NAME' || echo 'No había servicio ejecutándose'
+            sleep 3
             
-            echo '=== Liberando puerto $SERVICE_PORT ==='
+            # 3. Liberar puerto si está ocupado
+            echo 'Verificando puerto $SERVICE_PORT...'
             PORT_PID=\$(lsof -ti:$SERVICE_PORT 2>/dev/null || echo '')
             if [ ! -z \"\$PORT_PID\" ]; then
-              echo \"Forzando cierre de proceso \$PORT_PID\"
-              kill -9 \$PORT_PID 2>/dev/null || true
-              sleep 3
+              echo \"Forzando liberación de puerto - PID: \$PORT_PID\"
+              kill -9 \$PORT_PID
+              sleep 2
             fi
             
-            echo '=== Iniciando nuevo servicio ==='
+            # 4. Iniciar nuevo servicio
+            echo 'Iniciando $SERVICE_NAME en puerto $SERVICE_PORT...'
             nohup java -jar *.jar --server.port=$SERVICE_PORT --server.address=0.0.0.0 > app.log 2>&1 &
             APP_PID=\$!
-            echo \"Nuevo servicio iniciado con PID: \$APP_PID\"
+            echo \"✅ Servicio iniciado - PID: \$APP_PID\"
             
-            echo '=== Esperando inicio (30 segundos) ==='
-            sleep 30
+            # 5. Esperar y verificar
+            echo 'Esperando inicio del servicio (25 segundos)...'
+            sleep 25
             
+            # 6. Verificación final
             echo '=== Verificando despliegue ==='
             if ss -tuln | grep -q \":$SERVICE_PORT\"; then
-              echo '✅ ✅ ✅ DESPLIEGUE EXITOSO ✅ ✅ ✅'
-              echo 'Servicio $SERVICE_NAME ejecutándose en puerto $SERVICE_PORT'
-              echo '=== Últimas líneas del log ==='
-              tail -10 app.log
+              echo '🎉 🎉 🎉 DESPLIEGUE EXITOSO 🎉 🎉 🎉'
+              echo 'Servicio: $SERVICE_NAME'
+              echo 'Puerto: $SERVICE_PORT'
+              echo 'PID: \$APP_PID'
+              echo '--- Últimas líneas del log ---'
+              tail -5 app.log
             else
-              echo '❌ ❌ ❌ FALLO EN EL DESPLIEGUE ❌ ❌ ❌'
-              echo '=== Log completo del servicio ==='
+              echo '❌ ERROR: El servicio no se inició correctamente'
+              echo '--- Log completo ---'
               cat app.log
-              echo '=== Estado del proceso ==='
-              ps -p \$APP_PID >/dev/null && echo 'Proceso activo' || echo 'Proceso terminó'
+              echo '--- Estado del proceso ---'
+              ps -p \$APP_PID >/dev/null && echo 'Proceso activo' || echo 'Proceso no encontrado'
               exit 1
             fi
           "
 
-      - name: Final Verification
+      - name: Final Health Check
         run: |
-          echo "=== Verificación final ==="
-          ssh -i ~/.ssh/id_rsa \
-              -o StrictHostKeyChecking=no \
-              ec2-user@${{ secrets.EC2_HOST }} "
-            echo '--- Procesos Java ---'
-            ps aux | grep java | grep -v grep || echo 'No hay procesos Java'
+          echo "=== Verificación de salud final ==="
+          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ec2-user@$EC2_HOST "
+            echo '📊 Estado del sistema:'
+            echo '--- Servicios activos ---'
+            ps aux | grep java | grep -v grep | while read line; do
+              echo \"  📍 \$line\"
+            done || echo '  No hay servicios Java activos'
+            
             echo ''
-            echo '--- Puertos en uso ---'
-            ss -tuln | grep -E ':(8080|8081|8082|8083|8084)' | sort || echo 'No hay puertos de despliegue'
+            echo '--- Puertos en escucha ---'
+            ss -tuln | grep -E ':(8080|8081|8082|8083|8084)' | while read line; do
+              echo \"  🔵 \$line\"
+            done || echo '  No hay puertos de microservicios'
+            
             echo ''
-            echo '--- Estado de $SERVICE_NAME ---'
+            echo '--- Recursos del sistema ---'
+            echo \"  💾 Memoria: \$(free -h | grep Mem | awk '{print \$3\"/\"\$2}')\"
+            echo \"  💿 Disco: \$(df -h /home/ec2-user | tail -1 | awk '{print \$3\"/\"\$2}')\"
+            
+            echo ''
+            echo '=== ESTADO FINAL ==='
             if ss -tuln | grep -q \":$SERVICE_PORT\"; then
-              echo '✅ $SERVICE_NAME: ACTIVO en puerto $SERVICE_PORT'
+              echo '✅ ✅ ✅ $SERVICE_NAME DESPLEGADO CORRECTAMENTE ✅ ✅ ✅'
+              echo '📍 Puerto: $SERVICE_PORT'
+              echo '🌐 URL: http://$EC2_HOST:$SERVICE_PORT'
             else
-              echo '❌ $SERVICE_NAME: INACTIVO'
+              echo '❌ $SERVICE_NAME NO ESTÁ EJECUTÁNDOSE'
+              exit 1
             fi
           "
