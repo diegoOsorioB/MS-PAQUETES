@@ -33,18 +33,101 @@ jobs:
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H ${{ secrets.EC2_DNS }} >> ~/.ssh/known_hosts
 
-      - name: Test SSH Connection
+      - name: Test Basic SSH
         run: |
-          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ec2-user@${{ secrets.EC2_DNS }} "echo '✅ SSH Success'"
+          echo "=== Testing basic SSH connection ==="
+          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ec2-user@${{ secrets.EC2_DNS }} "echo '✅ Basic SSH works!'"
 
-      - name: Deploy
+      - name: Check EC2 Environment
         run: |
-          scp -i ~/.ssh/id_rsa target/*.jar ec2-user@${{ secrets.EC2_DNS }}:/home/ec2-user/$SERVICE_NAME/
-          ssh -i ~/.ssh/id_rsa ec2-user@${{ secrets.EC2_DNS }} "
+          echo "=== Checking EC2 environment ==="
+          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ec2-user@${{ secrets.EC2_DNS }} "
+            echo '1. Current directory:'
+            pwd
+            echo ''
+            echo '2. Home directory contents:'
+            ls -la /home/ec2-user/
+            echo ''
+            echo '3. Java version:'
+            java -version || echo 'Java not found'
+            echo ''
+            echo '4. Check if paquetes directory exists:'
+            ls -la /home/ec2-user/paquetes/ || echo 'Directory does not exist'
+          "
+
+      - name: Create Directory if Needed
+        run: |
+          echo "=== Ensuring directory exists ==="
+          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ec2-user@${{ secrets.EC2_DNS }} "
+            mkdir -p /home/ec2-user/$SERVICE_NAME
+            echo 'Directory created/verified'
+            ls -la /home/ec2-user/$SERVICE_NAME/
+          "
+
+      - name: Upload JAR
+        run: |
+          echo "=== Uploading JAR file ==="
+          scp -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no target/*.jar ec2-user@${{ secrets.EC2_DNS }}:/home/ec2-user/$SERVICE_NAME/
+          echo "✅ JAR uploaded successfully"
+
+      - name: Verify JAR on EC2
+        run: |
+          echo "=== Verifying JAR on EC2 ==="
+          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ec2-user@${{ secrets.EC2_DNS }} "
             cd /home/ec2-user/$SERVICE_NAME
-            pkill -f java || true
-            sleep 5
-            nohup java -jar *.jar --server.port=$SERVICE_PORT > app.log 2>&1 &
-            sleep 30
-            ss -tuln | grep ':$SERVICE_PORT' && echo '✅ Deployed' || echo '❌ Failed'
+            echo 'JAR files in directory:'
+            ls -la *.jar || echo 'No JAR files found'
+            echo ''
+            echo 'File size:'
+            du -h *.jar || echo 'Cannot check file size'
+          "
+
+      - name: Deploy Application
+        run: |
+          echo "=== Starting deployment ==="
+          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ec2-user@${{ secrets.EC2_DNS }} "
+            set -x  # Enable debug mode
+            
+            cd /home/ec2-user/$SERVICE_NAME
+            
+            echo '1. Stopping existing Java processes...'
+            pkill -f java || echo 'No Java processes to stop'
+            sleep 3
+            
+            echo '2. Checking current port usage...'
+            ss -tuln | grep ':$SERVICE_PORT' || echo 'Port $SERVICE_PORT is free'
+            
+            echo '3. Starting application...'
+            nohup java -jar *.jar --server.port=$SERVICE_PORT --server.address=0.0.0.0 > app.log 2>&1 &
+            APP_PID=\$!
+            echo \"Application started with PID: \$APP_PID\"
+            
+            echo '4. Waiting for startup...'
+            sleep 10
+            
+            echo '5. Checking if process is running...'
+            ps -p \$APP_PID >/dev/null && echo 'Process is running' || echo 'Process died'
+            
+            echo '6. Checking port...'
+            ss -tuln | grep ':$SERVICE_PORT' && echo '✅ Port $SERVICE_PORT is listening' || echo '❌ Port not listening'
+            
+            echo '7. Application logs (last 20 lines):'
+            tail -20 app.log || echo 'No logs available'
+            
+            set +x
+          "
+
+      - name: Final Check
+        run: |
+          echo "=== Final deployment check ==="
+          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ec2-user@${{ secrets.EC2_DNS }} "
+            echo '--- Final Status ---'
+            echo 'Java processes:'
+            ps aux | grep java | grep -v grep || echo 'No Java processes'
+            echo ''
+            echo 'Listening ports:'
+            ss -tuln | grep -E ':(8080|8081|8082|8083|8084)' | sort || echo 'No deployment ports'
+            echo ''
+            echo 'Paquetes service log:'
+            tail -10 /home/ec2-user/paquetes/app.log || echo 'No log file'
           "
