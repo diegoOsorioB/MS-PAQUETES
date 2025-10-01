@@ -32,6 +32,7 @@ jobs:
           echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H ${{ secrets.EC2_DNS }} >> ~/.ssh/known_hosts
+
       - name: Create Directory on EC2
         run: |
           echo "=== Creating directory on EC2 ==="
@@ -40,19 +41,21 @@ jobs:
             echo '✅ Directory /home/ec2-user/$SERVICE_NAME created'
             ls -la /home/ec2-user/ | grep $SERVICE_NAME
           "
+
       - name: Upload JAR
         run: |
           echo "=== Uploading JAR file ==="
           scp -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no target/*.jar ec2-user@${{ secrets.EC2_DNS }}:/home/ec2-user/$SERVICE_NAME/
           echo "✅ JAR uploaded successfully"
+
       - name: Deploy Application
         run: |
           echo "=== Starting deployment ==="
           ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ec2-user@${{ secrets.EC2_DNS }} "
             set -x
-          
+            
             cd /home/ec2-user/$SERVICE_NAME
-          
+            
             echo '1. Checking current processes on port $SERVICE_PORT...'
             PORT_PID=\$(lsof -ti:$SERVICE_PORT 2>/dev/null || echo '')
             if [ ! -z \"\$PORT_PID\" ]; then
@@ -62,15 +65,15 @@ jobs:
             else
               echo 'No process found on port $SERVICE_PORT'
             fi
-          
+            
             echo '2. Starting application...'
             nohup java -jar *.jar --server.port=$SERVICE_PORT --server.address=0.0.0.0 > app.log 2>&1 &
             APP_PID=\$!
             echo \"Application started with PID: \$APP_PID\"
-          
+            
             echo '3. Waiting for startup...'
             sleep 15
-          
+            
             echo '4. Checking if application is running...'
             if ps -p \$APP_PID > /dev/null; then
               echo '✅ Application process is running'
@@ -80,7 +83,7 @@ jobs:
               cat app.log
               exit 1
             fi
-          
+            
             echo '5. Checking port...'
             if ss -tuln | grep -q \":$SERVICE_PORT\"; then
               echo '✅ Port $SERVICE_PORT is listening'
@@ -91,9 +94,10 @@ jobs:
               cat app.log
               exit 1
             fi
-          
+            
             set +x
           "
+
       - name: Final Verification
         run: |
           echo "=== Final verification ==="
