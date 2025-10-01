@@ -28,55 +28,109 @@ jobs:
       - name: Build JAR
         run: mvn clean package -DskipTests
 
-      - name: Setup SSH
+      - name: Setup SSH Connection
         run: |
           mkdir -p ~/.ssh
-          # Crear el archivo de forma más robusta
-          cat << 'EOF' > ~/.ssh/id_rsa
-          ${{ secrets.EC2_SSH_KEY }}
-          EOF
+          # FORMA CORRECTA: Usar echo sin heredoc
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+          
+          # Verificar que la clave se creó correctamente
+          echo "=== Verificando clave SSH ==="
+          ls -la ~/.ssh/
+          echo "Primeras 3 líneas de la clave:"
+          head -3 ~/.ssh/id_rsa
+          echo "Últimas 3 líneas de la clave:"
+          tail -3 ~/.ssh/id_rsa
 
-      - name: Test SSH connection
+      - name: Test SSH Connection
         run: |
-          if ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no -o ConnectTimeout=10 ec2-user@${{ secrets.EC2_HOST }} "echo '✅ SSH OK'"; then
-            echo "SSH connection successful"
-          else
-            echo "SSH connection failed"
-            echo "Debug info:"
-            ls -la ~/.ssh/
-            echo "Key content (first 100 chars):"
-            head -c 100 ~/.ssh/id_rsa
-            exit 1
-          fi
+          echo "=== Probando conexión SSH ==="
+          ssh -i ~/.ssh/id_rsa \
+              -o StrictHostKeyChecking=no \
+              -o ConnectTimeout=30 \
+              -o BatchMode=yes \
+              ec2-user@${{ secrets.EC2_HOST }} "echo '✅ Conexión SSH exitosa'"
 
       - name: Deploy to EC2
         run: |
-          scp -i ~/.ssh/id_rsa target/*.jar ec2-user@${{ secrets.EC2_HOST }}:/home/ec2-user/$SERVICE_NAME/
+          echo "=== Iniciando despliegue ==="
           
-          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ec2-user@${{ secrets.EC2_HOST }} "
+          # Subir JAR
+          scp -i ~/.ssh/id_rsa \
+               -o StrictHostKeyChecking=no \
+               target/*.jar \
+               ec2-user@${{ secrets.EC2_HOST }}:/home/ec2-user/$SERVICE_NAME/
+          
+          echo "✅ JAR subido exitosamente"
+          
+          # Ejecutar despliegue en EC2
+          ssh -i ~/.ssh/id_rsa \
+              -o StrictHostKeyChecking=no \
+              ec2-user@${{ secrets.EC2_HOST }} "
+              
             cd /home/ec2-user/$SERVICE_NAME
             
-            # Backup
-            if ls *.jar 1> /dev/null 2>&1; then
+            echo '=== Creando backup ==='
+            if ls *.jar > /dev/null 2>&1; then
+              mkdir -p backup
               mv *.jar backup/
+              echo '✅ Backup creado'
             fi
             
-            # Stop service
-            pkill -f 'java.*$SERVICE_NAME' || true
-            sleep 3
+            echo '=== Deteniendo servicio anterior ==='
+            pkill -f 'java.*$SERVICE_NAME' || echo 'No hay procesos previos'
+            sleep 5
             
-            # Start service
+            echo '=== Liberando puerto $SERVICE_PORT ==='
+            PORT_PID=\$(lsof -ti:$SERVICE_PORT 2>/dev/null || echo '')
+            if [ ! -z \"\$PORT_PID\" ]; then
+              echo \"Forzando cierre de proceso \$PORT_PID\"
+              kill -9 \$PORT_PID 2>/dev/null || true
+              sleep 3
+            fi
+            
+            echo '=== Iniciando nuevo servicio ==='
             nohup java -jar *.jar --server.port=$SERVICE_PORT --server.address=0.0.0.0 > app.log 2>&1 &
-            echo \"Started with PID: \$!\"
+            APP_PID=\$!
+            echo \"Nuevo servicio iniciado con PID: \$APP_PID\"
             
-            sleep 20
+            echo '=== Esperando inicio (30 segundos) ==='
+            sleep 30
             
+            echo '=== Verificando despliegue ==='
             if ss -tuln | grep -q \":$SERVICE_PORT\"; then
-              echo '✅ Deployed successfully'
+              echo '✅ ✅ ✅ DESPLIEGUE EXITOSO ✅ ✅ ✅'
+              echo 'Servicio $SERVICE_NAME ejecutándose en puerto $SERVICE_PORT'
+              echo '=== Últimas líneas del log ==='
+              tail -10 app.log
             else
-              echo '❌ Deployment failed'
+              echo '❌ ❌ ❌ FALLO EN EL DESPLIEGUE ❌ ❌ ❌'
+              echo '=== Log completo del servicio ==='
+              cat app.log
+              echo '=== Estado del proceso ==='
+              ps -p \$APP_PID >/dev/null && echo 'Proceso activo' || echo 'Proceso terminó'
               exit 1
+            fi
+          "
+
+      - name: Final Verification
+        run: |
+          echo "=== Verificación final ==="
+          ssh -i ~/.ssh/id_rsa \
+              -o StrictHostKeyChecking=no \
+              ec2-user@${{ secrets.EC2_HOST }} "
+            echo '--- Procesos Java ---'
+            ps aux | grep java | grep -v grep || echo 'No hay procesos Java'
+            echo ''
+            echo '--- Puertos en uso ---'
+            ss -tuln | grep -E ':(8080|8081|8082|8083|8084)' | sort || echo 'No hay puertos de despliegue'
+            echo ''
+            echo '--- Estado de $SERVICE_NAME ---'
+            if ss -tuln | grep -q \":$SERVICE_PORT\"; then
+              echo '✅ $SERVICE_NAME: ACTIVO en puerto $SERVICE_PORT'
+            else
+              echo '❌ $SERVICE_NAME: INACTIVO'
             fi
           "
