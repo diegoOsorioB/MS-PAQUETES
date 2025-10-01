@@ -5,12 +5,12 @@ on:
     branches: [ main ]
 
 env:
-  SERVICE_NAME: paquetes
-  SERVICE_PORT: 8081
   EC2_HOST: "ec2-3-16-112-149.us-east-2.compute.amazonaws.com"
+  SERVICE_NAME: "paquetes"
+  SERVICE_PORT: "8081"
 
 jobs:
-  build-and-deploy:
+  deploy:
     runs-on: ubuntu-latest
     
     steps:
@@ -24,88 +24,102 @@ jobs:
           java-version: '21'
           cache: 'maven'
 
-      - name: Build JAR
+      - name: Build application
         run: mvn clean package -DskipTests
 
-      - name: Setup SSH with RSA Key
+      - name: Setup AWS SSH Key
         run: |
           mkdir -p ~/.ssh
-          # FORMA CORRECTA para clave RSA
-          cat > ~/.ssh/id_rsa << 'RSAKEY'
-          ${{ secrets.EC2_SSH_KEY }}
-          RSAKEY
+          # Usar la clave .pem de AWS directamente
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H $EC2_HOST >> ~/.ssh/known_hosts
-          
-          echo "=== Verificando clave RSA ==="
-          head -2 ~/.ssh/id_rsa
 
-      - name: Test SSH Connection
+      - name: Test AWS SSH Connection
         run: |
-          echo "=== Probando conexión SSH ==="
+          echo "Testing connection to EC2 instance..."
           ssh -i ~/.ssh/id_rsa \
               -o StrictHostKeyChecking=no \
-              -o ConnectTimeout=15 \
-              ec2-user@$EC2_HOST "echo '✅ Conexión SSH exitosa - Clave RSA funciona'"
-
-      - name: Prepare EC2
-        run: |
-          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ec2-user@$EC2_HOST "
-            mkdir -p /home/ec2-user/$SERVICE_NAME/backup
-            echo '✅ Directorios listos en EC2'
-          "
+              -o ConnectTimeout=10 \
+              ec2-user@$EC2_HOST "echo '✅ Successfully connected to EC2 using AWS key'"
 
       - name: Deploy to EC2
         run: |
-          # Subir JAR
+          echo "Starting deployment..."
+          
+          # Upload JAR file
           scp -i ~/.ssh/id_rsa \
-               -o StrictHostKeyChecking=no \
-               target/*.jar \
-               ec2-user@$EC2_HOST:/home/ec2-user/$SERVICE_NAME/
+              -o StrictHostKeyChecking=no \
+              target/*.jar \
+              ec2-user@$EC2_HOST:/home/ec2-user/$SERVICE_NAME/
           
-          echo "✅ JAR transferido a EC2"
+          echo "JAR uploaded successfully"
           
-          # Ejecutar en EC2
-          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ec2-user@$EC2_HOST "
+          # Execute deployment commands
+          ssh -i ~/.ssh/id_rsa \
+              -o StrictHostKeyChecking=no \
+              ec2-user@$EC2_HOST "
+              
             cd /home/ec2-user/$SERVICE_NAME
             
-            echo '=== Iniciando despliegue ==='
+            echo '=== Starting deployment process ==='
             
-            # Backup
+            # Create backup if needed
             if ls *.jar > /dev/null 2>&1; then
               mkdir -p backup
               mv *.jar backup/
-              echo '✅ Backup creado'
+              echo 'Backup created'
             fi
             
-            # Detener servicio
-            echo 'Deteniendo servicio anterior...'
-            pkill -f 'java.*$SERVICE_NAME' || echo 'No había servicio activo'
+            # Stop any running service
+            echo 'Stopping existing service...'
+            pkill -f 'java.*$SERVICE_NAME' || echo 'No running service found'
             sleep 5
             
-            # Liberar puerto
-            PORT_PID=\$(lsof -ti:$SERVICE_PORT 2>/dev/null || echo '')
-            if [ ! -z \"\$PORT_PID\" ]; then
-              kill -9 \$PORT_PID
-              sleep 3
-            fi
+            # Ensure port is free
+            echo 'Checking port $SERVICE_PORT...'
+            lsof -ti:$SERVICE_PORT | xargs kill -9 2>/dev/null || true
+            sleep 2
             
-            # Iniciar servicio
-            echo 'Iniciando $SERVICE_NAME en puerto $SERVICE_PORT...'
+            # Start the application
+            echo 'Starting $SERVICE_NAME on port $SERVICE_PORT...'
             nohup java -jar *.jar --server.port=$SERVICE_PORT --server.address=0.0.0.0 > app.log 2>&1 &
-            echo \"✅ Servicio iniciado - PID: \$!\"
+            echo \"Application started with PID: \$!\"
             
-            # Esperar
+            # Wait for startup
+            echo 'Waiting for application to start...'
             sleep 30
             
-            # Verificar
+            # Verify deployment
             if ss -tuln | grep -q \":$SERVICE_PORT\"; then
-              echo '🎉 DESPLIEGUE EXITOSO'
+              echo '🎉 DEPLOYMENT SUCCESSFUL!'
+              echo 'Service: $SERVICE_NAME'
+              echo 'Port: $SERVICE_PORT'
               echo 'URL: http://$EC2_HOST:$SERVICE_PORT'
             else
-              echo '❌ Falla en despliegue'
-              echo 'Logs:'
+              echo '❌ DEPLOYMENT FAILED'
+              echo 'Application logs:'
               cat app.log
               exit 1
+            fi
+          "
+
+      - name: Verify Deployment
+        run: |
+          ssh -i ~/.ssh/id_rsa \
+              -o StrictHostKeyChecking=no \
+              ec2-user@$EC2_HOST "
+            echo '=== Deployment Verification ==='
+            echo 'Java processes:'
+            ps aux | grep java | grep -v grep || echo 'No Java processes'
+            echo ''
+            echo 'Open ports:'
+            ss -tuln | grep -E ':(8080|8081|8082|8083|8084)' | sort || echo 'No deployment ports'
+            echo ''
+            echo 'Service $SERVICE_NAME status:'
+            if ss -tuln | grep -q \":$SERVICE_PORT\"; then
+              echo '✅ RUNNING on port $SERVICE_PORT'
+            else
+              echo '❌ NOT RUNNING'
             fi
           "
