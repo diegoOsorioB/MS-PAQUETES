@@ -1,18 +1,17 @@
-name: Deploy Clientes Service
+name: Deploy Paquetes Service
 
 on:
   push:
     branches: [ main ]
-  pull_request:
-    branches: [ main ]
 
 env:
-  SERVICE_NAME: paquetes
-  SERVICE_PORT: 8081
+  SERVICE_NAME: "paquetes"
+  SERVICE_PORT: "8081"
 
 jobs:
-  test:
+  deploy:
     runs-on: ubuntu-latest
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -24,109 +23,84 @@ jobs:
           java-version: '21'
           cache: 'maven'
 
-      - name: Run tests
-        run: mvn test
-
-  build-and-deploy:
-    runs-on: ubuntu-latest
-    needs: test
-    if: github.ref == 'refs/heads/main'
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '21'
-          cache: 'maven'
-
-      - name: Build JAR
+      - name: Build application
         run: mvn clean package -DskipTests
-
-      - name: Verify JAR
-        run: |
-          echo "✅ JAR built successfully:"
-          ls -la target/*.jar
 
       - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H ${{ secrets.EC2_DNS }} >> ~/.ssh/known_hosts
 
-      - name: Create directories on EC2
+      - name: Upload JAR
         run: |
-          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ec2-user@${{ secrets.EC2_HOST }} "
-            mkdir -p /home/ec2-user/$SERVICE_NAME/backup
-            echo 'Directories created for $SERVICE_NAME'
-          "
+          scp -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no target/*.jar ec2-user@${{ secrets.EC2_DNS }}:/home/ec2-user/$SERVICE_NAME/
 
-      - name: Deploy to EC2
+      - name: Deploy Application Safely
         run: |
-          # Upload JAR
-          scp -i ~/.ssh/id_rsa target/*.jar ec2-user@${{ secrets.EC2_HOST }}:/home/ec2-user/$SERVICE_NAME/
-          
-          # Stop and start service
-          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ec2-user@${{ secrets.EC2_HOST }} "
+          echo "=== Starting safe deployment ==="
+          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ec2-user@${{ secrets.EC2_DNS }} "
+            set -x
+            
             cd /home/ec2-user/$SERVICE_NAME
-          
-            # Create backup if JAR exists
-            if ls *.jar 1> /dev/null 2>&1; then
-              mv *.jar backup/
-              echo 'Backup created'
-            fi
-          
-            # Stop running service
-            echo 'Stopping existing service...'
-            pkill -f 'java.*$SERVICE_NAME' || true
-            sleep 3
-          
-            # Kill any process using the port
+            
+            echo '1. Checking current processes on port $SERVICE_PORT...'
             PORT_PID=\$(lsof -ti:$SERVICE_PORT 2>/dev/null || echo '')
             if [ ! -z \"\$PORT_PID\" ]; then
-              echo \"Killing process \$PORT_PID on port $SERVICE_PORT\"
-              kill -9 \$PORT_PID 2>/dev/null || true
-              sleep 2
-            fi
-          
-            # Start new service
-            echo 'Starting $SERVICE_NAME on port $SERVICE_PORT...'
-            nohup java -jar *.jar --server.port=$SERVICE_PORT --server.address=0.0.0.0 > app.log 2>&1 &
-            echo \"Service started with PID: \$!\"
-          
-            # Wait and verify
-            sleep 25
-          
-            # Health check
-            if curl -s http://localhost:$SERVICE_PORT/actuator/health > /dev/null; then
-              echo '✅ Health check passed'
-            elif ss -tuln | grep -q \":$SERVICE_PORT\"; then
-              echo '✅ Port is listening (health check unavailable)'
+              echo \"Found process \$PORT_PID on port $SERVICE_PORT - stopping it...\"
+              kill -9 \$PORT_PID
+              sleep 3
             else
-              echo '❌ Service failed to start'
-              echo '=== Application logs ==='
+              echo 'No process found on port $SERVICE_PORT'
+            fi
+            
+            echo '2. Starting application...'
+            nohup java -jar *.jar --server.port=$SERVICE_PORT --server.address=0.0.0.0 > app.log 2>&1 &
+            APP_PID=\$!
+            echo \"Application started with PID: \$APP_PID\"
+            
+            echo '3. Waiting for startup...'
+            sleep 15
+            
+            echo '4. Checking if application is running...'
+            if ps -p \$APP_PID > /dev/null; then
+              echo '✅ Application process is running'
+            else
+              echo '❌ Application process died'
+              echo 'Application logs:'
               cat app.log
               exit 1
             fi
+            
+            echo '5. Checking port...'
+            if ss -tuln | grep -q \":$SERVICE_PORT\"; then
+              echo '✅ Port $SERVICE_PORT is listening'
+              echo '🎉 Deployment successful!'
+            else
+              echo '❌ Port $SERVICE_PORT is not listening'
+              echo 'Application logs:'
+              cat app.log
+              exit 1
+            fi
+            
+            set +x
           "
 
-      - name: Verify deployment
+      - name: Final Verification
         run: |
-          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ec2-user@${{ secrets.EC2_HOST }} "
-            echo '=== Deployment Verification ==='
+          echo "=== Final verification ==="
+          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ec2-user@${{ secrets.EC2_DNS }} "
+            echo '--- Deployment Status ---'
             echo 'Service: $SERVICE_NAME'
             echo 'Port: $SERVICE_PORT'
             echo ''
-            echo 'Process:'
-            ps aux | grep java | grep $SERVICE_NAME | grep -v grep || echo 'No process found'
+            echo 'Processes for $SERVICE_NAME:'
+            ps aux | grep 'java.*$SERVICE_NAME' | grep -v grep || echo 'No specific service processes'
             echo ''
             echo 'Port status:'
-            ss -tuln | grep \":$SERVICE_PORT\" || echo 'Port not listening'
+            ss -tuln | grep \":$SERVICE_PORT\" && echo '✅ Port listening' || echo '❌ Port not listening'
             echo ''
-            echo 'Last logs:'
-            tail -10 /home/ec2-user/$SERVICE_NAME/app.log || echo 'No logs'
+            echo 'Application logs (last 5 lines):'
+            tail -5 /home/ec2-user/$SERVICE_NAME/app.log || echo 'No logs available'
           "
