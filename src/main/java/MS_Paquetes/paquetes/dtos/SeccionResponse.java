@@ -1,6 +1,4 @@
-package MS_Paquetes.paquetes.dto;
-
-import jakarta.persistence.Entity;
+package MS_PAQUETES.paquetes.dtos;
 
 import java.util.List;
 

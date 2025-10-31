@@ -1,6 +1,9 @@
-package MS_Paquetes.paquetes.repository;
+package MS_PAQUETES.paquetes.repository;
 
-import MS_Paquetes.paquetes.entity.Servicio;
+import MS_PAQUETES.paquetes.entity.ServicioSeccion;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.stereotype.Repository;
 
-public interface ServicioRepository extends JpaRepository<Servicio, Integer> {}
+@Repository
+public interface ServicioRepository extends JpaRepository<ServicioSeccion, Integer> {
+}

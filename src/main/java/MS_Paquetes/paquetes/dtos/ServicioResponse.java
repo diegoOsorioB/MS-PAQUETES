@@ -1,11 +1,8 @@
-package MS_Paquetes.paquetes.dto;
-
-import jakarta.persistence.Entity;
-
+package MS_PAQUETES.paquetes.dtos;
 
 public record ServicioResponse(
         Integer id,
-        String nombreServicio,
+        String nombrServicio,
         String descripcion,
         Double precio,
         Integer cantidad,

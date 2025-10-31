@@ -1,4 +1,4 @@
-package MS_Paquetes.paquetes.entity;
+package MS_PAQUETES.paquetes.entity;
 
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
@@ -30,12 +30,10 @@ public class Paquete {
     private Double precioPaquete;
 
     @OneToMany(mappedBy = "paquete", cascade = CascadeType.ALL, fetch = FetchType.EAGER)
-    private List<DetallePaquetes> secciones = new ArrayList<>();
+    private List<DetallePaquete> secciones = new ArrayList<>();
 
-    public List<DetallePaquetes> getSecciones() {
+    public List<DetallePaquete> getSecciones() {
         return secciones;
     }
-
-
 
 }

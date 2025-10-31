@@ -1,4 +1,4 @@
-package MS_Paquetes.paquetes.entity;
+package MS_PAQUETES.paquetes.entity;
 
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
@@ -15,13 +15,13 @@ public class Servicio {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     @Column(name = "id_servicio")
-    private Long idServicio;
+    private Integer idServicio;
 
     @Column(name = "nombre_servicio")
     private String nombreServicio;
 
     @Column(name = "precio_unitario")
-    private Double precio;
+    private Double precioServicio;
 
     private String descripcion;
 
