@@ -1,4 +1,4 @@
-package MS_Paquetes.paquetes.entity;
+package MS_PAQUETES.paquetes.entity;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
@@ -7,10 +7,10 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 @Entity
-@Table(name = "servicios_seccion")
 @Data
-@NoArgsConstructor
 @AllArgsConstructor
+@NoArgsConstructor
+@Table(name = "servicios_seccion")
 public class ServicioSeccion {
 
     @Id
@@ -18,19 +18,17 @@ public class ServicioSeccion {
     @Column(name = "id_servicio_seccion")
     private Integer idServicioSeccion;
 
-    // Relación con DetallePaquetes
-    @ManyToOne(fetch = FetchType.LAZY)
+    @ManyToOne
     @JoinColumn(name = "id_detalles_paquetes", nullable = false)
     @JsonIgnore
-    private DetallePaquetes detallePaquete;
+    private DetallePaquete detallePaquete;
 
     @Column(name = "id_servicio", nullable = false)
     private Integer idServicio;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "id_servicio", insertable = false, updatable = false)
+    @JoinColumn(name = "id_servicio",insertable = false, updatable = false)
     private Servicio servicio;
-
 
     @Column(nullable = false)
     private Integer cantidad;

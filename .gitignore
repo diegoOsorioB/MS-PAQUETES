@@ -1,31 +1,8 @@
-# Project
 HELP.md
 target/
-!.mvn/wrapper/maven-wrapper.jar
+.mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/
-
-# ✅ NUEVO: Variables de entorno y credenciales
-.env
-.env.local
-.env.*.local
-*.env
-config/application-*.properties
-config/application-*.yml
-application-*.properties
-application-*.yml
-
-# ✅ NUEVO: Logs y archivos temporales
-*.log
-logs/
-*.tmp
-*.temp
-
-# ✅ NUEVO: Archivos del sistema
-.DS_Store
-Thumbs.db
-*.orig
-*.rej
 
 ### STS ###
 .apt_generated
@@ -35,14 +12,13 @@ Thumbs.db
 .settings
 .springBeans
 .sts4-cache
+.env
 
 ### IntelliJ IDEA ###
 .idea
 *.iws
 *.iml
 *.ipr
-*.swp
-*.swo
 
 ### NetBeans ###
 /nbproject/private/
@@ -56,14 +32,3 @@ build/
 
 ### VS Code ###
 .vscode/
-
-# ✅ NUEVO: Archivos de compilación y empaquetado
-*.jar
-*.war
-*.ear
-*.zip
-*.tar.gz
-
-# ✅ NUEVO: Archivos de base de datos (si usas alguna local)
-*.db
-*.sqlite

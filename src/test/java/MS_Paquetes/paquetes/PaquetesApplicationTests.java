@@ -1,4 +1,4 @@
-package MS_Paquetes.paquetes;
+package MS_PAQUETES.paquetes;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;

@@ -1,16 +1,16 @@
-package MS_Paquetes.paquetes.dto;
+package MS_PAQUETES.paquetes.dtos;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
 @Data
-@NoArgsConstructor
 @AllArgsConstructor
+@NoArgsConstructor
 public class ServicioSeccionDTO {
-    private Integer idServicio;     // viene de otro microservicio
-    private Integer cantidad;
+    private Integer id_servicio_seccion;
+    private Integer idServicio;
     private String detallesAdicionales;
+    private Integer cantidad;
     private Double precio;
-
 }

@@ -1,4 +1,4 @@
-package MS_Paquetes.paquetes.security;
+package MS_PAQUETES.paquetes.security;
 
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
